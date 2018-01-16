@@ -13,6 +13,7 @@ package main
 
 import (
   "crypto/md5"
+  "encoding/binary"
   "encoding/hex"
   "encoding/json"
   "fmt"
@@ -64,45 +65,57 @@ type FortuneMessage struct {
 // Main workhorse method.
 func main() {
   // Read command args
-  localUDPAddr := os.Args[1]
-  localTCPAddr := os.Args[2]
-  aServerAddr := os.Args[3]
-
+  localUDPAddr, err := net.ResolveUDPAddr("udp", os.Args[1])
+  localTCPAddr, err := net.ResolveTCPAddr("tcp", os.Args[2])
+  aServerAddr, err := net.ResolveUDPAddr("udp", os.Args[3])
+  if err != nil {
+    fmt.Printf("Error resolving argument addresses: %v\n", err)
+  }
   // Use json.Marshal json.Unmarshal for encoding/decoding to servers
 
   // Connect to server via UDP
   // https://stackoverflow.com/questions/26028700/write-to-client-udp-socket-in-go
-  message := make([]byte, 1024)
-  uconnection, err := net.Dial("udp", aServerAddr)
+  uconnection, err := net.DialUDP("udp", localUDPAddr, aServerAddr)
   if err != nil {
-    fmt.Printf("Error connecting to aServer: %v", err)
+    fmt.Printf("Error connecting to aServer: %v\n", err)
   }
   defer uconnection.Close()
 
+  // Send arbitrary message
   uconnection.Write([]byte("Hi"))
+  message := make([]byte, 1024)
 
-  // https://stackoverflow.com/questions/25187718/invalid-character-x00-after-top-level-value
   length, err := uconnection.Read(message)
   if err != nil {
-    fmt.Printf("Error reading response on connection: %v", err)
+    fmt.Printf("Error reading response on connection: %v\n", err)
   }
 
   var nonceMessage NonceMessage
+  // https://stackoverflow.com/questions/25187718/invalid-character-x00-after-top-level-value
   // [:length] to truncate extra bytes from connection.Read()
   err = json.Unmarshal(message[:length], &nonceMessage)
 
   s := generateSecret()
   for !hasNZeroes(computeNonceSecretHash(nonceMessage.Nonce, s), nonceMessage.N){
-    // fmt.Println(s)
     s = generateSecret()
   }
+
+  /*
+  var s uint64
+  for s = 0; uint64(s) < 18446744073709551615; s++ {
+    fmt.Printf("%v\n", s)
+    if hasNZeroes(computeNonceSecretHash(nonceMessage.Nonce, string(s)), nonceMessage.N){
+      break
+    }
+  }
+  */
 
   // Create SecretMessage
   var secretMsg SecretMessage
   secretMsg.Secret = s
   smsg, err := json.Marshal(secretMsg)
   if err != nil {
-    fmt.Printf("Error encoding secret response: %v", err)
+    fmt.Printf("Error encoding secret response: %v\n", err)
   }
 
   // Send message
@@ -111,15 +124,19 @@ func main() {
   // Retrieve fserver info
   length, err = uconnection.Read(message)
   if err != nil {
-    fmt.Printf("Error reading fserver response: %v", err)
+    fmt.Printf("Error reading fServer response: %v\n", err)
   }
   var fim FortuneInfoMessage
   err = json.Unmarshal(message[:length], &fim)
 
   // Connect to fserver
-  tconnection, err := net.Dial("tcp", fim.FortuneServer)
+  fserver, err := net.ResolveTCPAddr("tcp", fim.FortuneServer)
   if err != nil {
-    fmt.Printf("Error connecting to fServer: %v", err)
+    fmt.Printf("Error resolving TCP address for fServer: %v\n", err)
+  }
+  tconnection, err := net.DialTCP("tcp", localTCPAddr, fserver)
+  if err != nil {
+    fmt.Printf("Error connecting to fServer: %v\n", err)
   }
   defer tconnection.Close()
 
@@ -143,7 +160,7 @@ func main() {
   }
 
   fmt.Printf("Fortune: %v\n", fortuneMsg.Fortune)
-  fmt.Printf("Rank: %v\n", fortuneMsg.Rank)
+  // fmt.Printf("Rank: %v\n", fortuneMsg.Rank)
 }
 
 func generateSecret() string {
@@ -152,7 +169,9 @@ func generateSecret() string {
   if err != nil {
     fmt.Printf("Error generating secret")
   }
-  return hex.EncodeToString(bytes)
+
+  // return hex.EncodeToString(bytes)
+  return string(binary.LittleEndian.Uint64(bytes))
 }
 
 // Returns a boolean indicating if given hash contains N zeroes
